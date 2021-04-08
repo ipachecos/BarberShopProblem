@@ -4,180 +4,134 @@
 #include <unistd.h>
 #include <semaphore.h>
 
-#define False 0
-#define True 1
+int numeroCadeiras = 5; //4 na sala de espera + 1 para corte
+int clientesAtuais = 0;
+int clientesTotais = 25;
+int tempoDeCorte = 0;
 
-int _NUMBER_CHAIRS = 5;
-int current_customers = 0;
-int initial_customers = 25;
-int hair_cut_time = 0;
-
-
-void *customer();
-void get_hair_cut();
-void balk(int);
-void *barber();
-void cut_hair();
+void *cliente();
+void corteDeCabelo();
+void *balk(int);
+void *barbeiro();
+void cortandoCabelo();
 
 //semaforos
-sem_t sem_cust;     //Cliente querendo cortar cabelo
-sem_t sem_mutex;    //Controla a chegada de clientes na barbearia
-sem_t sem_barber;   //Define se o barbeiro está ocupado ou n
-sem_t sem_custDone; //Cliente terminou de cortar o cabelo
-sem_t sem_barbDone; //Barbeiro terminou de cortar cabelo
+sem_t sem_cliente;     //Cliente querendo cortar cabelo
+sem_t sem_mutex;       //Controla o fluxo de clientes na barbearia
+sem_t sem_barbeiro;    //Define se o barbeiro está ocupado ou n
+sem_t sem_fimCliente;  //Cliente terminou de cortar o cabelo
+sem_t sem_fimBarbeiro; //Barbeiro terminou de cortar cabelo
+sem_t sem_barbeiroDormindo; // Barbeiro dormindo quando não há clientes
 
-int success = 0;
+int corteConcluido = 0; // quantos cortes o barbeiro fez no dia
 
 int main()
 {
-    pthread_t barber_id;
-    pthread_t customer_id[initial_customers];
-    int customer_num[initial_customers];
+    pthread_t barbeiro_id;
+    pthread_t cliente_id[clientesTotais];
+    int cliente_num[clientesTotais];
 
-    sem_init(&sem_cust, 0, 0);
-    sem_init(&sem_mutex, 0, 1);
-    sem_init(&sem_barber, 0, 0);
-    sem_init(&sem_custDone, 0, 0);
-    sem_init(&sem_barbDone, 0, 0);
+    sem_init(&sem_cliente, 0, 0);     // Semaforo do cliente iniciando em 0
+    sem_init(&sem_mutex, 0, 1);       // Semaforo mutex iniciando em 1
+    sem_init(&sem_barbeiro, 0, 0);    // Semaforo do barbeiro iniciando em 0
+    sem_init(&sem_fimCliente, 0, 0);  // Semaforo que indica fim de corte para o cliente inciando em 0
+    sem_init(&sem_fimBarbeiro, 0, 0); // Semaforo que indica fim de corte para o barbeiro iniciando em 0
+    sem_init(&sem_barbeiroDormindo, 0, 0); //
 
-    //Iniciando o thread barbeiro
-    pthread_create(&barber_id, NULL, *barber, NULL);
+    //Iniciando a thread barbeiro
+    pthread_create(&barbeiro_id, NULL, *barbeiro, NULL);
 
-    //Iniciando todos threads de consumidores
-    for (int iterator = 0; iterator < initial_customers; iterator++)
+    //Iniciando todas as threads de clientes
+    for (int i = 0; i < clientesTotais; i++)
     {
-        // pthread_create(&customer_id[iterator], NULL, customer, (void *)&customer_num[iterator]);
-        printf("\t\tCustomer %d arrives!\n", iterator);
-        pthread_create(&customer_id[iterator], NULL, customer, (void *) &iterator);
-        int rNum = rand() % 2 + 1;
-
+        pthread_create(&cliente_id[i], NULL, cliente, (void *)&i);
+        int rNum = rand() % 3 + 1; //número aleatório para que as threads sejam geradas de tempo em tempo simulando os clientes chegando aleatoriamente
         sleep(rNum);
     }
 
-    printf("\nOffice hour ended. Doors Closed.\n");
-    sleep(25);
-    printf("\nClosing Barbershop\n");
-    printf("Total gained today: $%d\n", success*5);
-
-    for (int iterator = 0; iterator < initial_customers; iterator++)
-        pthread_join(customer_id[iterator], NULL);
-    //pthread_join(barber_id, NULL);
-
-    sem_destroy(&sem_cust);
-    sem_destroy(&sem_mutex);
-    sem_destroy(&sem_barber);
-    sem_destroy(&sem_custDone);
-    sem_destroy(&sem_barbDone);
-
+    printf("\nFim dos clientes.\n");
+    while (clientesAtuais > 0); // faz a main rodar até o fim dos clientes para que o barbeiro acabe o corte de todos
+        
+    printf("\t\t\t\tDia concluido, saldo do dia: R$ %d\n", corteConcluido * 10);
     return 0;
 }
 
-void *barber() {
-    while(1) {
-        sem_wait(&sem_cust);
-        sem_post(&sem_barber);
+void *barbeiro()
+{
+    while (1)
+    {   
+        sem_wait(&sem_mutex);
+        if(clientesAtuais == 0)
+            printf("\t\t\t\t\t\tBarbeiro foi dormir\n");
+        sem_post(&sem_mutex);
 
-        printf("\t\t\t\tBarber is preparing to cut\n");
-        cut_hair();
-        printf("\t\t\t\t\t\tBarber Finished Cutting\n");
-        success++;
+        // primeiro rendezvous com a função cliente
+        sem_wait(&sem_cliente);
+        sem_post(&sem_barbeiro);
+        
+        printf("\t\t\t\t\t\tBarbeiro chama o cliente para o corte\n");
+        cortandoCabelo();
+        corteConcluido++;
 
-        sem_post(&sem_barbDone);
-        sem_wait(&sem_custDone);
+        // segundo rendezvou com a função cliente
+        sem_wait(&sem_fimCliente);
+        sem_post(&sem_fimBarbeiro);
     }
 }
 
-void *customer(void * n) {
+void *cliente(void *n)
+{
     int num = *(int *)n;
     sem_wait(&sem_mutex);
-    if (current_customers == _NUMBER_CHAIRS) {
-        //Se nao ha cadeiras disponiveis, sai do salao
-        sem_post(&sem_mutex);
-        balk(num);
-        return NULL;
+    printf("\t\tCliente %d chegou!\n", num + 1);
+
+    if (clientesAtuais == 0) {
+        printf("\t\tCliente %d acorda o barbeiro\n", num + 1);
     }
-    
-    current_customers++;
-    printf("\t\tCustomer %d is waiting\n", num);
+
+    if (clientesAtuais == numeroCadeiras)
+    {
+        sem_post(&sem_mutex);
+        //Se nao ha cadeiras disponiveis, sai do salao
+        return balk(num);
+    }
+    printf("\t\tCliente %d acha uma cadeira livre\n", num + 1);
+    clientesAtuais++;
+    printf("\t\tCliente %d está esperando\n", num + 1);
     sem_post(&sem_mutex);
-
-    sem_post(&sem_cust);
-    sem_wait(&sem_barber);
-
-        printf("\t\t\t\tCustomer %d is getting haircut\n", num);
-        hair_cut_time = rand() % 5 + 1;
-        get_hair_cut();
-        printf("\t\t\t\t\t\tCustomer %d finished cutting\n", num);
-
-    sem_post(&sem_custDone);
-    sem_wait(&sem_barbDone);
+    // primeiro rendezvous com a função barbeiro
+    sem_post(&sem_cliente);
+    sem_wait(&sem_barbeiro);
+    printf("\t\t\t\t\t\tCliente %d está cortando o cabelo\n", num + 1);
+    tempoDeCorte = rand() % 5 + 1;
+    corteDeCabelo();
+    printf("\t\t\t\t\t\tCliente %d terminou de cortar o cabelo\n", num + 1);
 
     sem_wait(&sem_mutex);
-    current_customers--;
+    clientesAtuais--;
     sem_post(&sem_mutex);
+
+    // segundo rendezvous com a função barbeiro
+    sem_post(&sem_fimCliente);
+    sem_wait(&sem_fimBarbeiro);
 
     return NULL;
 }
 
-void balk(int num) {
-    printf("Customer %d exited without cutting\n", num);
-    return;
+// função para o cliente que não achou cadeira vazia sair do salão
+void *balk(int num)
+{
+    printf("Cliente %d não achou cadeira vazia e saiu sem cortar o cabelo\n", num + 1);
+    return NULL;
 }
 
-void cut_hair() {
-    sleep(hair_cut_time);
+// funções para esperar um tempo simulando o corte de cabelo
+void cortandoCabelo()
+{
+    sleep(tempoDeCorte);
 }
 
-void get_hair_cut() {    
-    sleep(hair_cut_time);
+void corteDeCabelo()
+{
+    sleep(tempoDeCorte);
 }
-
-// int cut_hair()
-// // fala se o cabeleireiro esta cortando cabelo ou n
-// // Return:
-// //     {False} se o número de consumidores é igual a zero. Barbeiro nao está
-// //     cortando cabelo.
-// //     {True} se o número de consimidores é diferente de zero. Barbeiro
-// //     está cortando cabelo
-// {
-
-//     if (customers_inside_barbershop == 0)
-//     {
-//         rand() % _NUMBER_CHAIRS * 2; //numero randomico incial de clientes
-
-//         return False;
-//     }
-//     return True;
-// }
-
-// int getHairCut()
-// {
-//     if (cut_hair())
-//     {
-//         if (get_avaliable_chair() > 0 && get_avaliable_chair() < _NUMBER_CHAIRS)
-//         {
-
-//             //sentar e esperar
-//         }
-//         else
-//         {
-//             //vazar
-//             // balk()
-//         }
-//     }
-//     else
-//     {
-//         //sentar e cortar
-//         pthread_mutex_lock(&lock);
-//         sleep(5);
-//         printf("\n Cortou o cabelo!!!\n");
-//         customers_inside_barbershop -= 1;
-//         pthread_mutex_unlock(&lock);
-//     }
-// }
-
-// int get_avaliable_chair()
-// {
-//     // retorna o número de caideiras disponíveis
-//     return 0
-// }
